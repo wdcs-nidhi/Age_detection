@@ -1,0 +1,9 @@
+opencv-contrib-python>=4.8,<5
+numpy
+insightface
+onnxruntime
+pyyaml
+transformers
+torch
+pillow
+accelerate

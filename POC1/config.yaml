@@ -1,0 +1,31 @@
+camera:
+  source: "rtsp://USER:PASS@HOST:554/stream1"
+
+detection:
+  model: "buffalo_l"
+  device: "auto"
+  det_size: 640
+  confidence: 0.5
+  # Face must fill this share of frame height (~1/5 of the picture)
+  min_face_frac: 0.18
+  # Eyes must be at least this many pixels apart
+  min_iod: 32
+  # Crop must be sharp enough (blurred/far faces fail)
+  min_sharp: 60
+
+age:
+  model: "dima806/fairface_age_image_detection"
+
+gender:
+  model: "dima806/fairface_gender_image_detection"
+
+processing:
+  detection_interval: 3
+  attr_interval: 15
+  skip_frames: 0
+
+output:
+  save_video: true
+  save_image: true
+  display: true
+  path: "output/result.mp4"
