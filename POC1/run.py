@@ -60,15 +60,18 @@ def list_images(folder: Path) -> list[Path]:
 
 def print_results(label: str, results: list[dict]) -> None:
     if not results:
-        # print(f"{label}  no frontal faces")
         return
     print(f"{label}  faces={len(results)}")
     for r in results:
         x1, y1, x2, y2 = r["bbox"]
+        gender = r.get("gender") or "?"
+        group = r.get("age_group") or "?"
+        age = r.get("age")
+        age_s = f"{age:.0f}" if age is not None else "?"
         print(
             f"  ID {r['id']}"
-            f"  gender={r['gender']} ({r['gender_conf']:.2f})"
-            f"  age={r['age']:.0f} {r['age_group']} ({r['age_conf']:.2f})"
+            f"  gender={gender} ({r.get('gender_conf', 0):.2f})"
+            f"  age={age_s} {group} ({r.get('age_conf', 0):.2f})"
             f"  bbox=[{x1},{y1},{x2},{y2}]"
         )
 
@@ -79,6 +82,22 @@ def save_image(frame, out_dir: Path, stem: str) -> Path:
     cv2.imwrite(str(path), frame)
     print(f"Saved image → {path}")
     return path
+
+
+WINDOW = "Age Gender Live"
+
+
+def open_live_window():
+    cv2.startWindowThread()
+    cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(WINDOW, 1280, 720)
+    cv2.waitKey(1)
+
+
+def show_frame(frame) -> bool:
+    """Show overlay. Return False if user pressed q."""
+    cv2.imshow(WINDOW, frame)
+    return (cv2.waitKey(1) & 0xFF) != ord("q")
 
 
 def process_image(pipe: Pipeline, image_path: Path, out_dir: Path, save: bool, display: bool):
@@ -92,19 +111,22 @@ def process_image(pipe: Pipeline, image_path: Path, out_dir: Path, save: bool, d
     if save:
         save_image(out, out_dir, image_path.stem)
     if display:
-        cv2.imshow("Age Gender", out)
+        open_live_window()
+        show_frame(out)
         cv2.waitKey(1)
     return results
 
 
 def process_stream(pipe: Pipeline, source: str, out_path: Path, save_video: bool, save_image_flag: bool, display: bool, skip: int):
     live = is_rtsp(source) or source.isdigit()
+    save_video = False
     cap = open_source(source)
     if not cap.isOpened():
         raise RuntimeError(f"Unable to open: {source}")
     print(f"Source: {source}")
     if display:
-        print("Keys: q=quit")
+        open_live_window()
+        print("Live window open. Keys: q=quit")
 
     writer = None
     frame_i = 0
@@ -146,16 +168,13 @@ def process_stream(pipe: Pipeline, source: str, out_path: Path, save_video: bool
                 if not cap.grab():
                     break
                 writer.write(out)
-            writer.write(frame)
-            
 
         if frame_i == 1 or frame_i % 30 == 0:
             fps_now = frame_i / max(time.time() - t0, 1e-6)
             print_results(f"frame={frame_i}  {fps_now:.1f} fps", results)
 
         if display:
-            cv2.imshow("Age Gender", out)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            if not show_frame(out):
                 break
 
     cap.release()
@@ -179,10 +198,10 @@ def main():
         cfg.setdefault("camera", {})["source"] = args.source
     source = str(cfg.get("camera", {}).get("source", ""))
     out_cfg = cfg.get("output", {})
-    save_video = bool(out_cfg.get("save_video", True))
-    save_img = bool(out_cfg.get("save_image", True))
+    save_video = bool(out_cfg.get("save_video", False))
+    save_img = bool(out_cfg.get("save_image", False))
     display = bool(out_cfg.get("display", True)) and not args.no_display
-    out_path = Path(out_cfg.get("path", str(HERE / "output/result.mp4")))
+    out_path = Path(out_cfg.get("path", str(f'{HERE} / output/{str(time.time())}.mp4')))
     skip = int(cfg.get("processing", {}).get("skip_frames", 2))
 
     pipe = Pipeline(cfg)

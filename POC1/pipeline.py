@@ -53,6 +53,7 @@ class Pipeline:
         self._last_faces = []
 
     def process(self, frame):
+        frame = frame.copy()
         self.frame_id += 1
         if self.frame_id == 1 or self.frame_id % self.detect_every == 0:
             self._last_faces = self.faces.detect(frame)
@@ -68,16 +69,14 @@ class Pipeline:
                 trk["since_attr"] = 0
             else:
                 trk["since_attr"] = trk.get("since_attr", 0) + 1
-            if not trk.get("age_group"):
-                continue
             item = {
                 "id": trk["id"],
                 "bbox": trk["bbox"],
-                "age": trk["age"],
-                "age_group": trk["age_group"],
-                "age_conf": trk["age_conf"],
-                "gender": trk["gender"],
-                "gender_conf": trk["gender_conf"],
+                "age": trk.get("age"),
+                "age_group": trk.get("age_group"),
+                "age_conf": trk.get("age_conf", 0.0),
+                "gender": trk.get("gender"),
+                "gender_conf": trk.get("gender_conf", 0.0),
                 "face_conf": trk["confidence"],
             }
             results.append(item)
@@ -131,17 +130,24 @@ class Pipeline:
 
     def _draw(self, frame, item: dict):
         x1, y1, x2, y2 = item["bbox"]
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 0), 2)
-        label = (
-            f"ID {item['id']} | {item['gender']} | "
-            f"{item['age']:.0f}y {item['age_group']}"
-        )
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 0), 2)
+        gender = item.get("gender")
+        group = item.get("age_group")
+        age = item.get("age")
+        if gender and group:
+            age_s = f"{age:.0f}y " if age is not None else ""
+            label = f"{gender} | {age_s}{group}"
+        else:
+            label = "face"
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        y_bar = max(0, y1 - th - 10)
+        cv2.rectangle(frame, (x1, y_bar), (x1 + tw + 8, y1), (0, 220, 0), -1)
         cv2.putText(
             frame,
             label,
-            (x1, max(20, y1 - 8)),
+            (x1 + 4, y1 - 6),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (0, 200, 0),
+            0.6,
+            (0, 0, 0),
             2,
         )
