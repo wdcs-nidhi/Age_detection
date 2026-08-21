@@ -14,6 +14,13 @@ detection:
   min_sharp: 60
 
 age:
+  # mivolo | fairface
+  backend: "mivolo"
+  # HF hub id, or local folder with model.safetensors
+  checkpoint: "mivolo_models"
+  device: "auto"
+  use_persons: false
+  # kept for backend: fairface
   model: "dima806/fairface_age_image_detection"
 
 gender:
@@ -27,5 +34,7 @@ processing:
 output:
   save_video: true
   save_image: true
+  save_json: true
+  json_path: "results.json"
   display: true
   path: "output/result.mp4"

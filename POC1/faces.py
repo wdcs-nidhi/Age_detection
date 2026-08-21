@@ -106,7 +106,7 @@ class FaceFinder:
         self.min_sharp = float(min_sharp)
         self.app = FaceAnalysis(
             name=model_name or "buffalo_l",
-            allowed_modules=["detection"],
+            allowed_modules=["detection", "genderage"],
         )
         self.app.prepare(
             ctx_id=self.ctx_id,
@@ -145,11 +145,25 @@ class FaceFinder:
                 self.min_sharp,
             ):
                 continue
+
+            buffalo_age = getattr(face, "age", None)
+            sex = getattr(face, "sex", None)
+            if sex is None:
+                sex = getattr(face, "gender", None)
+            if sex in (1, "M", "m", "male"):
+                buffalo_gender = "male"
+            elif sex in (0, "F", "f", "female"):
+                buffalo_gender = "female"
+            else:
+                buffalo_gender = None
+
             faces.append(
                 {
                     "bbox": box,
                     "confidence": float(face.det_score),
                     "crop": crop,
+                    "buffalo_age": float(buffalo_age) if buffalo_age is not None else None,
+                    "buffalo_gender": buffalo_gender,
                 }
             )
         return faces

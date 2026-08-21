@@ -2,3 +2,10 @@
 POC1/yolov8l-pose.pt
 POC1/.yolov8l-pose.pt.cb6ab85865714fc5bb4f14c0fc6738f7.part
 POC1/output
+POC1/mivolo_models/.cache
+POC1/mivolo_models/model.safetensors
+POC1/mivolo_models/README.md
+POC1/MiVOLO
+POC1/__pycache__
+POC2/__pycache__
+POC2/output

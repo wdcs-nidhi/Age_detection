@@ -1,0 +1,23 @@
+# Camera / Image → InsightFace buffalo_l → crop → MiVOLO v2 age
+
+camera:
+  source: "0"
+
+detection:
+  model: "buffalo_l"
+  device: "auto"
+  det_size: 640
+  confidence: 0.5
+  pad: 0.15
+
+age:
+  # local weights from POC1, or HF id: iitolstykh/mivolo_v2
+  checkpoint: "../POC1/mivolo_models"
+  device: "auto"
+
+output:
+  save_image: true
+  save_json: true
+  json_path: "results.json"
+  display: true
+  path: "output/result.mp4"

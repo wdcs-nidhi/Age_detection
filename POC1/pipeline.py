@@ -4,6 +4,7 @@ import cv2
 
 from faces import FaceFinder
 from fairface import AgeGender
+from mivolo_age import MiVOLOAgeGender, age_to_group
 
 
 def _iou(a, b) -> float:
@@ -18,6 +19,15 @@ def _iou(a, b) -> float:
     area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
     union = area_a + area_b - inter
     return inter / union if union > 0 else 0.0
+
+
+def _fmt_src(name: str, age, group, gender, conf=None) -> str:
+    age_s = f"{age:.0f}y" if isinstance(age, (int, float)) else "?"
+    group_s = group or "?"
+    gender_s = gender or "?"
+    if conf is not None:
+        return f"{name}: {gender_s} {age_s} {group_s} ({conf:.2f})"
+    return f"{name}: {gender_s} {age_s} {group_s}"
 
 
 class Pipeline:
@@ -37,9 +47,17 @@ class Pipeline:
             min_iod=float(det.get("min_iod", 32)),
             min_sharp=float(det.get("min_sharp", 60)),
         )
-        self.attr = AgeGender(
+        # Always compare: MiVOLO + FairFace + buffalo_l genderage
+        self.mivolo = MiVOLOAgeGender(
+            checkpoint=str(age.get("checkpoint", "mivolo_models")),
+            device=str(age.get("device", det.get("device", "auto"))),
+            use_persons=bool(age.get("use_persons", False)),
+        )
+        self.fairface = AgeGender(
             age_id=age.get("model", "dima806/fairface_age_image_detection"),
-            gender_id=gender.get("model", "dima806/fairface_gender_image_detection"),
+            gender_id=gender.get(
+                "model", "dima806/fairface_gender_image_detection"
+            ),
         )
         self.frame_id = 0
         self.tracks: dict[int, dict] = {}
@@ -62,22 +80,43 @@ class Pipeline:
 
         results = []
         for trk in self.tracks.values():
-            need = trk.get("age_group") is None or trk["since_attr"] >= self.attr_every
+            need = (
+                trk.get("mivolo") is None
+                or trk.get("fairface") is None
+                or trk["since_attr"] >= self.attr_every
+            )
             if need and trk.get("crop") is not None:
-                pred = self.attr.predict(trk["crop"])
-                trk.update(pred)
+                trk["mivolo"] = self.mivolo.predict(trk["crop"])
+                trk["fairface"] = self.fairface.predict(trk["crop"])
                 trk["since_attr"] = 0
             else:
                 trk["since_attr"] = trk.get("since_attr", 0) + 1
+
+            buffalo = {
+                "age": trk.get("buffalo_age"),
+                "age_group": age_to_group(trk["buffalo_age"])
+                if trk.get("buffalo_age") is not None
+                else None,
+                "gender": trk.get("buffalo_gender"),
+                "age_conf": 1.0,
+                "gender_conf": 1.0,
+            }
+            mivolo = trk.get("mivolo") or {}
+            fairface = trk.get("fairface") or {}
+
+            # Keep top-level fields from MiVOLO for older callers
             item = {
                 "id": trk["id"],
                 "bbox": trk["bbox"],
-                "age": trk.get("age"),
-                "age_group": trk.get("age_group"),
-                "age_conf": trk.get("age_conf", 0.0),
-                "gender": trk.get("gender"),
-                "gender_conf": trk.get("gender_conf", 0.0),
                 "face_conf": trk["confidence"],
+                "age": mivolo.get("age"),
+                "age_group": mivolo.get("age_group"),
+                "age_conf": mivolo.get("age_conf", 0.0),
+                "gender": mivolo.get("gender"),
+                "gender_conf": mivolo.get("gender_conf", 0.0),
+                "mivolo": mivolo,
+                "buffalo_l": buffalo,
+                "fairface": fairface,
             }
             results.append(item)
             self._draw(frame, item)
@@ -100,6 +139,8 @@ class Pipeline:
             self.tracks[tid]["bbox"] = face["bbox"]
             self.tracks[tid]["confidence"] = face["confidence"]
             self.tracks[tid]["crop"] = face["crop"]
+            self.tracks[tid]["buffalo_age"] = face.get("buffalo_age")
+            self.tracks[tid]["buffalo_gender"] = face.get("buffalo_gender")
             self.tracks[tid]["misses"] = 0
             assigned_t.add(tid)
             assigned_f.add(fi)
@@ -119,35 +160,47 @@ class Pipeline:
                 "bbox": face["bbox"],
                 "confidence": face["confidence"],
                 "crop": face["crop"],
+                "buffalo_age": face.get("buffalo_age"),
+                "buffalo_gender": face.get("buffalo_gender"),
                 "misses": 0,
                 "since_attr": 10_000,
-                "age": None,
-                "age_group": None,
-                "age_conf": 0.0,
-                "gender": None,
-                "gender_conf": 0.0,
+                "mivolo": None,
+                "fairface": None,
             }
 
     def _draw(self, frame, item: dict):
         x1, y1, x2, y2 = item["bbox"]
         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 0), 2)
-        gender = item.get("gender")
-        group = item.get("age_group")
-        age = item.get("age")
-        if gender and group:
-            age_s = f"{age:.0f}y " if age is not None else ""
-            label = f"{gender} | {age_s}{group}"
-        else:
-            label = "face"
-        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-        y_bar = max(0, y1 - th - 10)
-        cv2.rectangle(frame, (x1, y_bar), (x1 + tw + 8, y1), (0, 220, 0), -1)
-        cv2.putText(
-            frame,
-            label,
-            (x1 + 4, y1 - 6),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 0, 0),
-            2,
-        )
+
+        lines = []
+        for key, name in (
+            ("mivolo", "MiVOLO"),
+            ("buffalo_l", "buffalo_l"),
+            ("fairface", "FairFace"),
+        ):
+            src = item.get(key) or {}
+            lines.append(
+                _fmt_src(
+                    name,
+                    src.get("age"),
+                    src.get("age_group"),
+                    src.get("gender"),
+                    src.get("age_conf") if key == "fairface" else src.get("gender_conf"),
+                )
+            )
+
+        y = y1 - 8
+        for line in reversed(lines):
+            (tw, th), _ = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            y_bar = max(0, y - th - 4)
+            cv2.rectangle(frame, (x1, y_bar), (x1 + tw + 6, y + 2), (0, 220, 0), -1)
+            cv2.putText(
+                frame,
+                line,
+                (x1 + 3, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 0, 0),
+                1,
+            )
+            y = y_bar - 2
