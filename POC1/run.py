@@ -194,7 +194,6 @@ def process_stream(
     skip: int,
 ):
     live = is_rtsp(source) or source.isdigit()
-    save_video = False
     cap = open_source(source)
     if not cap.isOpened():
         raise RuntimeError(f"Unable to open: {source}")
@@ -223,27 +222,28 @@ def process_stream(
             continue
 
         frame_i += 1
+        # Detect / age on a copy; keep `frame` raw for video save
         out, results = pipe.process(frame)
         last, last_results = out, results
 
-        if save_video and writer is None:
-            h, w = out.shape[:2]
-            src_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-            if src_fps < 1:
-                src_fps = 25.0
-            writer = cv2.VideoWriter(
-                str(out_path),
-                cv2.VideoWriter_fourcc(*"mp4v"),
-                src_fps,
-                (w, h),
-            )
-            print(f"Saving video → {out_path}  fps={src_fps:.1f}")
-        if writer is not None:
-            writer.write(out)
+        if save_video:
+            if writer is None:
+                h, w = frame.shape[:2]
+                src_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+                if src_fps < 1:
+                    src_fps = 25.0
+                writer = cv2.VideoWriter(
+                    str(out_path),
+                    cv2.VideoWriter_fourcc(*"mp4v"),
+                    src_fps,
+                    (w, h),
+                )
+                print(f"Saving raw video → {out_path}  fps={src_fps:.1f}")
+            writer.write(frame)
             for _ in range(max(0, skip)):
                 if not cap.grab():
                     break
-                writer.write(out)
+                writer.write(frame)
 
         if frame_i == 1 or frame_i % 30 == 0:
             fps_now = frame_i / max(time.time() - t0, 1e-6)
@@ -259,7 +259,7 @@ def process_stream(
     cap.release()
     if writer is not None:
         writer.release()
-        print(f"Saved video → {out_path}")
+        print(f"Saved raw video → {out_path}")
     if save_image_flag and last is not None:
         save_image(last, out_path.parent, out_path.stem)
     if not collected and last_results is not None:

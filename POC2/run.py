@@ -92,6 +92,7 @@ def face_payload(r: dict) -> dict:
         "id": r.get("id"),
         "bbox": list(r.get("bbox") or []),
         "face_conf": r.get("face_conf"),
+        "sharp": r.get("sharp"),
         "age": r.get("age"),
         "age_group": r.get("age_group"),
         "gender": r.get("gender"),
@@ -144,7 +145,14 @@ def process_image(pipe: Pipeline, image_path: Path, out_dir: Path, save: bool, d
     return results
 
 
-def process_stream(pipe: Pipeline, source: str, out_path: Path, save_image_flag: bool, display: bool):
+def process_stream(
+    pipe: Pipeline,
+    source: str,
+    out_path: Path,
+    save_video: bool,
+    save_image_flag: bool,
+    display: bool,
+):
     live = is_rtsp(source) or source.isdigit()
     cap = open_source(source)
     if not cap.isOpened():
@@ -154,6 +162,7 @@ def process_stream(pipe: Pipeline, source: str, out_path: Path, save_image_flag:
         open_live_window()
         print("Live window. Press q to quit.")
 
+    writer = None
     frame_i = 0
     last = None
     last_results: list[dict] = []
@@ -173,8 +182,24 @@ def process_stream(pipe: Pipeline, source: str, out_path: Path, save_image_flag:
             continue
 
         frame_i += 1
+        # Detect / age on a copy; keep `frame` raw for video save
         out, results = pipe.process(frame)
         last, last_results = out, results
+
+        if save_video:
+            if writer is None:
+                h, w = frame.shape[:2]
+                src_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+                if src_fps < 1:
+                    src_fps = 25.0
+                writer = cv2.VideoWriter(
+                    str(out_path),
+                    cv2.VideoWriter_fourcc(*"mp4v"),
+                    src_fps,
+                    (w, h),
+                )
+                print(f"Saving raw video → {out_path}  fps={src_fps:.1f}")
+            writer.write(frame)
 
         if frame_i == 1 or frame_i % 30 == 0:
             fps_now = frame_i / max(time.time() - t0, 1e-6)
@@ -191,6 +216,9 @@ def process_stream(pipe: Pipeline, source: str, out_path: Path, save_image_flag:
             break
 
     cap.release()
+    if writer is not None:
+        writer.release()
+        print(f"Saved raw video → {out_path}")
     if save_image_flag and last is not None:
         save_image(last, out_path.parent, out_path.stem)
     if not collected:
@@ -216,6 +244,7 @@ def main():
         cfg.setdefault("camera", {})["source"] = args.source
     source = str(cfg.get("camera", {}).get("source", "0"))
     out_cfg = cfg.get("output", {})
+    save_video = bool(out_cfg.get("save_video", True))
     save_img = bool(out_cfg.get("save_image", True))
     save_json_flag = bool(out_cfg.get("save_json", True))
     display = bool(out_cfg.get("display", True)) and not args.no_display
@@ -247,7 +276,9 @@ def main():
         )
         print("Done.")
     else:
-        last, collected = process_stream(pipe, source, out_path, save_img, display)
+        last, collected = process_stream(
+            pipe, source, out_path, save_video, save_img, display
+        )
         all_items.extend(collected)
         print(f"Done. {len(last)} face(s) on last frame.")
 

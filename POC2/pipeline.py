@@ -30,6 +30,8 @@ class Pipeline:
             det_size=int(det.get("det_size", 640)),
             det_thresh=float(det.get("confidence", 0.5)),
             pad=float(det.get("pad", 0.15)),
+            min_sharp=float(det.get("min_sharp", 80)),
+            min_face_frac=float(det.get("min_face_frac", 0.12)),
         )
         self.age_model = MiVOLOAge(
             checkpoint=str(age.get("checkpoint", "../POC1/mivolo_models")),
@@ -48,6 +50,7 @@ class Pipeline:
                 "id": i,
                 "bbox": face["bbox"],
                 "face_conf": face["confidence"],
+                "sharp": face.get("sharp"),
                 "age": pred.get("age"),
                 "age_group": pred.get("age_group"),
                 "gender": pred.get("gender"),

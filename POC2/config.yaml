@@ -9,6 +9,10 @@ detection:
   det_size: 640
   confidence: 0.5
   pad: 0.15
+  # Drop blurry crops (Laplacian variance). Raise if still soft faces pass.
+  min_sharp: 80
+  # Face height must be at least this share of frame (~12%)
+  min_face_frac: 0.12
 
 age:
   # local weights from POC1, or HF id: iitolstykh/mivolo_v2
@@ -16,6 +20,7 @@ age:
   device: "auto"
 
 output:
+  save_video: true
   save_image: true
   save_json: true
   json_path: "results.json"
