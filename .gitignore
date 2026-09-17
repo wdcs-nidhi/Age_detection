@@ -15,3 +15,4 @@ POC3/output
 POC3/utils/__pycache__
 POC3/yolov8n.pt
 POC3/envagegen
+POC3/weights

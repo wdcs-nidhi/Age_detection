@@ -340,7 +340,7 @@ class AgeGenderPipeline:
 
             # ------------------------------------------------
             # DEBUG
-            print(f"FACE {face_index}")
+            print(f"FACE (index) {face_index}")
             print("Face bbox:", bbox)
             print("Face crop:", face_crop.shape)
             print("Person crop:", person_crop.shape)
@@ -387,11 +387,7 @@ class AgeGenderPipeline:
                     px1, py1, px2, py2 = ( matched_person[ "bbox" ] )
                     cv2.rectangle( annotated, (px1, py1), (px2, py2), (255, 0, 255), 2 )
 
-        # ----------------------------------------------------
-        # FINAL
-        print("FINAL RESULTS")
-        for result in output_results: print(result)
-        
+        # ----------------------------------------------------        
         if draw:
             return { "results": output_results, "image": annotated }
 

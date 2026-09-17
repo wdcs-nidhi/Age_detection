@@ -417,7 +417,6 @@ class MiVOLOPredictor:
                 image_std=[ 0.229, 0.224, 0.225 ],
             )
         )
-        print( "MiVOLO loaded." )
 
     # ========================================================
     # IMAGE -> RGB NUMPY
