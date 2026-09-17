@@ -298,19 +298,28 @@ class MiVOLOForImageClassification(nn.Module):
 # PREDICTOR
 class MiVOLOPredictor:
 
-    def __init__( self, config_path, weights_path, device="cpu" ):
+    def __init__( self, config=None, weights_path=None, device="cpu" ):
 
         print("\nCreating MiVOLO model...")
-        print(f"Loading checkpoint:\n{weights_path}")
+
+        if isinstance(config, str):
+            config_path = config
+            config = None
 
         self.device = torch.device(device)
 
         # =====================================================
         # CONFIG
-        
-        with open( config_path, "r", ) as f: config_dict = json.load(f)
 
-        self.config = MiVOLOConfig( **config_dict )
+        if isinstance(config, MiVOLOConfig):
+            self.config = config
+        elif isinstance(config, dict):
+            self.config = MiVOLOConfig(**config)
+        else:
+            self.config = MiVOLOConfig()
+
+        if weights_path is not None:
+            print(f"Loading checkpoint:\n{weights_path}")
 
         print( f"Age config: min={self.config.min_age}, max={self.config.max_age}, avg={self.config.avg_age}" )
 
@@ -322,8 +331,13 @@ class MiVOLOPredictor:
         # =====================================================
         # CHECKPOINT
 
+        if weights_path is None:
+            self.model.to( self.device )
+            self.model.eval()
+            return
+
         checkpoint = load_file( weights_path, device="cpu" )
-        
+
         print( f"Checkpoint tensors : " f"{len(checkpoint)}" )
 
         # =====================================================

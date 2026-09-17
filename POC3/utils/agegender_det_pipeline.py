@@ -5,7 +5,7 @@ from insightface.app import FaceAnalysis
 from ultralytics import YOLO
 from ultralytics.nn.tasks import DetectionModel
 
-from utils.mivolo_model import MiVOLOPredictor
+from utils.mivolo_model import MiVOLOConfig, MiVOLOPredictor
 
 
 # ============================================================
@@ -20,8 +20,7 @@ class AgeGenderPipeline:
         self,
         face_model="buffalo_l",
         person_model="yolov8n.pt",
-        mivolo_config=( "/home/webclues-nidhi/mYpY/RnD/Age_detectoion/models/config.json" ),
-        mivolo_weights=( "/home/webclues-nidhi/mYpY/RnD/Age_detectoion/models/model.safetensors" ),
+        mivolo_weights="/home/webclues-nidhi/mYpY/RnD/Age_detectoion/POC3/weights/model.safetensors",
         device="cpu",
         face_det_size=(640, 640),
         person_conf=0.25,
@@ -67,15 +66,16 @@ class AgeGenderPipeline:
         # MiVOLO
 
         print( "\nLoading MiVOLO..." )
+        
+        mivolo_config = MiVOLOConfig()
 
         self.mivolo = MiVOLOPredictor(
-            config_path=mivolo_config,
+            config=mivolo_config,
             weights_path=mivolo_weights,
             device=self.device,
         )
 
-        print( "MiVOLO loaded." )
-        print("Pipeline ready")
+        print( "MiVOLO loaded........, Pipeline ready")
 
     # ========================================================
     # BBOX
