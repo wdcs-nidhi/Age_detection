@@ -1,7 +1,7 @@
 # Camera / Image → InsightFace buffalo_l → crop → MiVOLO v2 age
 
 camera:
-  source: "0"
+  source: "/home/webclues-nidhi/mYpY/Data/vids/person/Tapo_ITC_demo_2.avi"
 
 detection:
   model: "buffalo_l"

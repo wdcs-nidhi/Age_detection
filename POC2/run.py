@@ -61,14 +61,27 @@ def list_images(folder: Path) -> list[Path]:
         p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in IMAGE_EXTS
     )
 
-
-def print_results(label: str, results: list[dict]) -> None:
+def print_results(frame: list, label: str, results: list[dict]) -> None:
     if not results:
         print(f"{label}  faces=0")
         return
     print(f"{label}  faces={len(results)}")
+    out_dir = HERE / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
     for r in results:
-        x1, y1, x2, y2 = r["bbox"]
+        x1, y1, x2, y2 = map(int, r["bbox"])
+        x1 = max(0, min(x1, frame.shape[1] - 1))
+        y1 = max(0, min(y1, frame.shape[0] - 1))
+        x2 = max(x1 + 1, min(x2, frame.shape[1]))
+        y2 = max(y1 + 1, min(y2, frame.shape[0]))
+        crop = frame[y1:y2, x1:x2]
+        nm = out_dir / f"{time.time_ns()}.jpg"
+        ok = cv2.imwrite(str(nm), crop)
+        if not ok:
+            alt = out_dir / f"{time.time_ns()}.png"
+            ok = cv2.imwrite(str(alt), crop)
+            nm = alt
+        print("saved face::", nm if ok else "failed to save face crop")
         age = r.get("age")
         age_s = f"{age:.0f}" if isinstance(age, (int, float)) else "?"
         print(
@@ -135,7 +148,7 @@ def process_image(pipe: Pipeline, image_path: Path, out_dir: Path, save: bool, d
         print(f"Skip: {image_path}")
         return []
     out, results = pipe.process(frame)
-    print_results(image_path.name, results)
+    print_results(frame, image_path.name, results)
     if save:
         save_image(out, out_dir, image_path.stem)
     if display:
@@ -203,7 +216,7 @@ def process_stream(
 
         if frame_i == 1 or frame_i % 30 == 0:
             fps_now = frame_i / max(time.time() - t0, 1e-6)
-            print_results(f"frame={frame_i}  {fps_now:.1f} fps", results)
+            print_results(frame, f"frame={frame_i}  {fps_now:.1f} fps", results)
             collected.append(
                 {
                     "source": source,
