@@ -1,477 +1,1148 @@
-import time
-import torch
 import cv2
 import numpy as np
-from PIL import Image
-from transformers import (
-    ViTImageProcessor,
-    AutoConfig,
-    CONFIG_MAPPING,
-    MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING,
-)
-from safetensors.torch import load_file
-
-from utils.mivolo_model import MiVOLOConfig, MiVOLOForImageClassification
-
-CONFIG_MAPPING.register("mivolo", MiVOLOConfig)
-MODEL_FOR_IMAGE_CLASSIFICATION_MAPPING.register(
-    MiVOLOConfig, MiVOLOForImageClassification
-)
+import torch
 
 from insightface.app import FaceAnalysis
+from ultralytics import YOLO
+from ultralytics.nn.tasks import DetectionModel
+
+from utils.mivolo_model import MiVOLOPredictor
 
 
+# ============================================================
+# PyTorch / Ultralytics safe loading
+# ============================================================
 
-class MiVOLOPredictor:
-
-    def __init__(
-        self,
-        config_path="/home/webclues-nidhi/mYpY/RnD/Age_detectoion/models/config.json",
-        safetensors_path="/home/webclues-nidhi/mYpY/RnD/Age_detectoion/models/model.safetensors",
-        device=None,
-    ):
-        self.device = device or (
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
-
-        print("Device:", self.device)
-
-        self.processor = ViTImageProcessor(
-            size={"height": 384, "width": 384},
-            do_resize=True,
-            do_rescale=True,
-            rescale_factor=1 / 255.0,
-            do_normalize=True,
-            image_mean=[0.485, 0.456, 0.406],
-            image_std=[0.229, 0.224, 0.225],
-        )
-
-        # ---------------------------------------------------------
-        # CONFIG
-        # ---------------------------------------------------------
-
-        config = AutoConfig.from_pretrained(
-            config_path,
-            local_files_only=True,
-        )
-        print("\n========== MIVOLO CONFIG ==========")
-        print("model_name       =", config.model_name)
-        print("input_size       =", getattr(config, "input_size", None))
-        print("in_chans         =", config.in_chans)
-        print("num_classes      =", config.num_classes)
-        print("num_classes_gender =", config.num_classes_gender)
-        print("min_age          =", config.min_age)
-        print("max_age          =", config.max_age)
-        print("avg_age          =", config.avg_age)
-        print("with_persons_model =", config.with_persons_model)
-        print("use_persons      =", getattr(config, "use_persons", None))
-        print("use_person_crops =", getattr(config, "use_person_crops", None))
-        print("use_face_crops   =", getattr(config, "use_face_crops", None))
-        print("===================================\n")
-
-        # Our custom patch embedding receives:
-        # face RGB (3) + person RGB (3) = 6 channels
-        config.in_chans = 6
-        config.num_classes = 3
-        config.num_classes_gender = 2
-
-        config.model_name = "volo_d1_384"
-
-        # ---------------------------------------------------------
-        # MODEL
-        # ---------------------------------------------------------
-        self.model = MiVOLOForImageClassification(config)
-        
-        # print("\n========== MODEL PATCH EMBED ==========")
-        # for name, param in self.model.model.patch_embed.named_parameters():
-        #     print(name, tuple(param.shape))
-        # print("========================================\n")
-        # ---------------------------------------------------------
-        # LOAD SAFETENSORS
-        # ---------------------------------------------------------
-
-        raw_state_dict = load_file(
-            safetensors_path,
-            device="cpu",
-        )
-        # print("\n========== HEAD SHAPES ==========")
-        # for name, value in raw_state_dict.items():
-        #     if any(x in name.lower() for x in [
-        #         "head",
-        #         "fc",
-        #         "classifier",
-        #         "age",
-        #         "gender",
-        #     ]):
-        #         print(name, tuple(value.shape))
-        # print("=================================\n")
-
-        # print("\n========== PATCH EMBED CHECKPOINT KEYS ==========")
-        # for key, value in raw_state_dict.items():
-        #     if "patch_embed" in key:
-        #         print(f"{key:70s} {tuple(value.shape)}")
-        # print("=================================================\n")
-
-        model_state_dict = self.model.state_dict()
-
-        cleaned_state_dict = {}
-
-        print("\n========== CHECKPOINT LOADING ==========")
-
-        for key, value in raw_state_dict.items():
-
-            new_key = key
-
-            # Remove mivolo. prefix if present
-            if new_key.startswith("mivolo."):
-                new_key = new_key.replace(
-                    "mivolo.",
-                    "",
-                    1,
-                )
-
-            # Model parameters live under self.model
-            if not new_key.startswith("model."):
-                new_key = f"model.{new_key}"
-
-            # Unknown key
-            if new_key not in model_state_dict:
-                print(f"[SKIP UNKNOWN] {new_key}")
-                continue
-
-            # Shape mismatch
-            if value.shape != model_state_dict[new_key].shape:
-                print(
-                    f"[SKIP SHAPE] {new_key}\n"
-                    f"    checkpoint: {tuple(value.shape)}\n"
-                    f"    model:      {tuple(model_state_dict[new_key].shape)}"
-                )
-                continue
-
-            cleaned_state_dict[new_key] = value
-
-        print(f"\nCheckpoint tensors: {len(raw_state_dict)}")
-        print(f"Compatible tensors: {len(cleaned_state_dict)}")
-
-        # ---------------------------------------------------------
-        # LOAD
-        # ---------------------------------------------------------
-
-        load_result = self.model.load_state_dict(
-            cleaned_state_dict,
-            strict=False,
-        )
-
-        print("\n========== WEIGHT LOADING ==========")
-        print(
-            "Missing keys:",
-            len(load_result.missing_keys),
-        )
-        print(
-            "Unexpected keys:",
-            len(load_result.unexpected_keys),
-        )
-
-        if load_result.missing_keys:
-            print("\nMissing keys:")
-            for key in load_result.missing_keys:
-                print("  ", key)
-
-        if load_result.unexpected_keys:
-            print("\nUnexpected keys:")
-            for key in load_result.unexpected_keys:
-                print("  ", key)
-
-        print("====================================\n")
-
-        # ---------------------------------------------------------
-        # DEVICE
-        # ---------------------------------------------------------
-
-        self.model = self.model.to(
-            self.device
-        ).float()
-
-        self.model.eval()
-
-    @torch.no_grad()
-    def predict(self, face_crop, body_crop=None):
-
-        face_tensor = self.processor(
-            images=face_crop,
-            return_tensors="pt",
-        )["pixel_values"]
-
-        face_tensor = face_tensor.to(
-            self.device,
-            dtype=torch.float32,
-        )
-
-        # --------------------------------------------------
-        # MiVOLO requires:
-        # [face RGB + body RGB] = 6 channels
-        # --------------------------------------------------
-        if body_crop is None:
-            print('body_crop is', body_crop)
-            body_tensor = face_tensor.clone()
-            
-        else:
-            body_tensor = self.processor(
-                images=body_crop,
-                return_tensors="pt",
-            )["pixel_values"]
-
-            body_tensor = body_tensor.to(
-                self.device,
-                dtype=torch.float32,
-            )
-            print(type(body_crop), 'body_crop is not none')
-
-        concat_input = torch.cat(
-            [face_tensor, body_tensor],
-            dim=1
-        )
-        
-        print("Face tensor:", face_tensor.shape)
-        print("Body tensor:", body_tensor.shape)
-        print("Concat input:", concat_input.shape)
-
-
-        outputs = self.model(
-            concat_input=concat_input,
-            return_dict=True,
-        )
-        print("Model output shape:", outputs.head_outputs.shape)
-        print("Raw output:", outputs.head_outputs.detach().cpu())
-        
-        
-        age = (
-            outputs.age_output
-            .detach()
-            .cpu()
-            .flatten()[0]
-            .item()
-        )
-
-        gender_score = (
-            outputs.gender_probs
-            .detach()
-            .cpu()
-            .flatten()[0]
-            .item()
-        )
-
-        gender_idx = (
-            outputs.gender_class_idx
-            .detach()
-            .cpu()
-            .flatten()[0]
-            .item()
-        )
-        gender_id2label = getattr(
-            self.model.config,
-            "gender_id2label",
-            {
-                "0": "male",
-                "1": "female",
-            },
-        )
-
-        gender = gender_id2label.get(
-            str(int(gender_idx)),
-            "unknown",
-        ).capitalize()
-
-        # gender = (
-        #     "Male"
-        #     if int(gender_idx) == 0
-        #     else "Female"
-        # )
-
-        return {
-            "age": round(float(age), 1),
-            "gender": gender,
-            "gender_confidence": round(
-                float(gender_score),
-                2,
-            ),
-        }
-
-
-# class AgeGenderPipeline:
-#     def __init__(self):
-#         self.mivolo = MiVOLOPredictor()
-
-#     # def process_image(self, face_crop):
-#     #     if isinstance(face_crop, np.ndarray):
-#     #         # Pad image boundaries by 20% to approximate MiVOLO's target aspect margin
-#     #         h, w, _ = face_crop.shape
-#     #         pad_h, pad_w = int(h * 0.2), int(w * 0.2)
-#     #         face_crop = cv2.copyMakeBorder(
-#     #             face_crop, pad_h, pad_h, pad_w, pad_w, 
-#     #             borderType=cv2.BORDER_CONSTANT, value=[0, 0, 0]
-#     #         )
-#     #         face_crop = Image.fromarray(cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB))
-#     #     elif not isinstance(face_crop, Image.Image):
-#     #         raise TypeError("face_crop must be an OpenCV ndarray or PIL Image")
-
-#     #     pred = self.mivolo.predict(face_crop=face_crop)
-#     #     return [pred]
-
-#     def process_image(self, face_crop):
-#         if isinstance(face_crop, np.ndarray):
-#             face_crop = Image.fromarray(cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB))
-#         elif not isinstance(face_crop, Image.Image):
-#             raise TypeError("face_crop must be an OpenCV ndarray or PIL Image")
-
-#         pred = self.mivolo.predict(face_crop=face_crop)
-#         return [pred]
-
+torch.serialization.add_safe_globals([
+    DetectionModel
+])
 
 
 class AgeGenderPipeline:
 
-    def __init__(self):
+    def __init__(
+        self,
+        face_model="buffalo_l",
+        person_model="yolov8n.pt",
 
-        # ---------------------------------------------------------
-        # Buffalo face detector
-        # ---------------------------------------------------------
+        mivolo_config=(
+            "/home/webclues-nidhi/"
+            "mYpY/RnD/Age_detectoion/"
+            "models/config.json"
+        ),
+
+        mivolo_weights=(
+            "/home/webclues-nidhi/"
+            "mYpY/RnD/Age_detectoion/"
+            "models/model.safetensors"
+        ),
+
+        device="cpu",
+
+        face_det_size=(640, 640),
+        person_conf=0.25,
+        face_conf=0.40,
+        person_iou=0.45,
+    ):
+
+        # ----------------------------------------------------
+        # Device
+        # ----------------------------------------------------
+
+        if device is None:
+
+            self.device = (
+                "cuda"
+                if torch.cuda.is_available()
+                else "cpu"
+            )
+
+        else:
+
+            self.device = device
+
+        print(
+            "\n========================================"
+        )
+
+        print(
+            "Age / Gender Pipeline"
+        )
+
+        print(
+            "========================================"
+        )
+
+        print(
+            "Device:",
+            self.device,
+        )
+
+        # ----------------------------------------------------
+        # Buffalo
+        # ----------------------------------------------------
+
+        print(
+            "\nLoading InsightFace Buffalo..."
+        )
+
+        providers = (
+            [
+                "CUDAExecutionProvider",
+                "CPUExecutionProvider",
+            ]
+            if self.device.startswith("cuda")
+            else [
+                "CPUExecutionProvider"
+            ]
+        )
+
         self.face_app = FaceAnalysis(
-            name="buffalo_l",
-            providers=["CPUExecutionProvider"],
+            name=face_model,
+            providers=providers,
+        )
+
+        ctx_id = (
+            0
+            if self.device.startswith("cuda")
+            else -1
         )
 
         self.face_app.prepare(
-            ctx_id=0,
-            det_size=(640, 640),
+            ctx_id=ctx_id,
+            det_size=face_det_size,
         )
 
-        # ---------------------------------------------------------
-        # MiVOLO
-        # ---------------------------------------------------------
-        self.mivolo = MiVOLOPredictor()
+        self.face_conf = float(
+            face_conf
+        )
 
-    # -------------------------------------------------------------
-    # Create larger context crop around Buffalo face bbox
-    # -------------------------------------------------------------
-    def make_context_crop(
-        self,
+        print(
+            "Buffalo loaded."
+        )
+
+        # ----------------------------------------------------
+        # YOLO
+        # ----------------------------------------------------
+
+        print(
+            "\nLoading YOLO person detector..."
+        )
+
+        print(
+            "Model:",
+            person_model,
+        )
+
+        self.person_detector = YOLO(
+            person_model
+        )
+
+        self.yolo_device = (
+            self.device
+            if self.device.startswith("cuda")
+            else "cpu"
+        )
+
+        self.person_conf = float(
+            person_conf
+        )
+
+        self.person_iou = float(
+            person_iou
+        )
+
+        print(
+            "YOLO loaded."
+        )
+
+        # ----------------------------------------------------
+        # MiVOLO
+        # ----------------------------------------------------
+
+        print(
+            "\nLoading MiVOLO..."
+        )
+
+        self.mivolo = MiVOLOPredictor(
+            config_path=mivolo_config,
+            weights_path=mivolo_weights,
+            device=self.device,
+        )
+
+        print(
+            "MiVOLO loaded."
+        )
+
+        print(
+            "\n========================================"
+        )
+
+        print(
+            "Pipeline ready"
+        )
+
+        print(
+            "========================================\n"
+        )
+
+    # ========================================================
+    # BBOX
+    # ========================================================
+
+    @staticmethod
+    def clip_bbox(
+        bbox,
+        image_shape,
+    ):
+
+        h, w = image_shape[:2]
+
+        x1, y1, x2, y2 = [
+            int(round(v))
+            for v in bbox
+        ]
+
+        x1 = max(
+            0,
+            min(x1, w - 1),
+        )
+
+        y1 = max(
+            0,
+            min(y1, h - 1),
+        )
+
+        x2 = max(
+            0,
+            min(x2, w),
+        )
+
+        y2 = max(
+            0,
+            min(y2, h),
+        )
+
+        return [
+            x1,
+            y1,
+            x2,
+            y2,
+        ]
+
+    @staticmethod
+    def bbox_area(bbox):
+
+        x1, y1, x2, y2 = bbox
+
+        return float(
+            max(0, x2 - x1)
+            * max(0, y2 - y1)
+        )
+
+    @staticmethod
+    def bbox_center(bbox):
+
+        x1, y1, x2, y2 = bbox
+
+        return (
+            (x1 + x2) / 2.0,
+            (y1 + y2) / 2.0,
+        )
+
+    @staticmethod
+    def bbox_iou(
+        box_a,
+        box_b,
+    ):
+
+        ax1, ay1, ax2, ay2 = box_a
+        bx1, by1, bx2, by2 = box_b
+
+        ix1 = max(
+            ax1,
+            bx1,
+        )
+
+        iy1 = max(
+            ay1,
+            by1,
+        )
+
+        ix2 = min(
+            ax2,
+            bx2,
+        )
+
+        iy2 = min(
+            ay2,
+            by2,
+        )
+
+        iw = max(
+            0,
+            ix2 - ix1,
+        )
+
+        ih = max(
+            0,
+            iy2 - iy1,
+        )
+
+        intersection = (
+            iw * ih
+        )
+
+        if intersection <= 0:
+            return 0.0
+
+        area_a = (
+            AgeGenderPipeline
+            .bbox_area(box_a)
+        )
+
+        area_b = (
+            AgeGenderPipeline
+            .bbox_area(box_b)
+        )
+
+        union = (
+            area_a
+            + area_b
+            - intersection
+        )
+
+        if union <= 0:
+            return 0.0
+
+        return (
+            intersection
+            / union
+        )
+
+    @staticmethod
+    def face_inside_person(
+        face_bbox,
+        person_bbox,
+    ):
+
+        fx1, fy1, fx2, fy2 = (
+            face_bbox
+        )
+
+        px1, py1, px2, py2 = (
+            person_bbox
+        )
+
+        ix1 = max(
+            fx1,
+            px1,
+        )
+
+        iy1 = max(
+            fy1,
+            py1,
+        )
+
+        ix2 = min(
+            fx2,
+            px2,
+        )
+
+        iy2 = min(
+            fy2,
+            py2,
+        )
+
+        intersection = (
+            max(0, ix2 - ix1)
+            * max(0, iy2 - iy1)
+        )
+
+        face_area = (
+            AgeGenderPipeline
+            .bbox_area(face_bbox)
+        )
+
+        if face_area <= 0:
+            return 0.0
+
+        return (
+            intersection
+            / face_area
+        )
+
+    # ========================================================
+    # FACE FALLBACK CROP
+    # ========================================================
+
+    @staticmethod
+    def expand_bbox(
         image,
         bbox,
         scale=2.5,
     ):
-        x1, y1, x2, y2 = map(int,bbox)
+
+        x1, y1, x2, y2 = bbox
+
         h, w = image.shape[:2]
 
-        cx = (x1 + x2) / 2.0
-        cy = (y1 + y2) / 2.0
+        cx = (
+            x1 + x2
+        ) / 2.0
 
-        bw = x2 - x1
-        bh = y2 - y1
+        cy = (
+            y1 + y2
+        ) / 2.0
 
-        new_w = bw * scale
-        new_h = bh * scale
+        bw = (
+            x2 - x1
+        )
 
-        nx1 = max(0, int(cx - new_w / 2))
-        ny1 = max(0, int(cy - new_h / 2))
-        nx2 = min(w, int(cx + new_w / 2))
-        ny2 = min(h, int(cy + new_h / 2))
+        bh = (
+            y2 - y1
+        )
 
-        return image[ny1:ny2, nx1:nx2]
+        new_w = (
+            bw * scale
+        )
 
-    # -------------------------------------------------------------
-    # Main pipeline
-    # -------------------------------------------------------------
-    def process_image(self, original_image):
+        new_h = (
+            bh * scale
+        )
 
-        if not isinstance(original_image, np.ndarray):
-            raise TypeError(
-                "process_image expects an OpenCV "
-                "numpy ndarray."
+        nx1 = int(
+            cx - new_w / 2
+        )
+
+        ny1 = int(
+            cy - new_h / 2
+        )
+
+        nx2 = int(
+            cx + new_w / 2
+        )
+
+        ny2 = int(
+            cy + new_h / 2
+        )
+
+        return [
+            max(0, nx1),
+            max(0, ny1),
+            min(w, nx2),
+            min(h, ny2),
+        ]
+
+    # ========================================================
+    # CROP
+    # ========================================================
+
+    @staticmethod
+    def crop_image(
+        image,
+        bbox,
+    ):
+
+        x1, y1, x2, y2 = [
+            int(v)
+            for v in bbox
+        ]
+
+        crop = image[
+            y1:y2,
+            x1:x2,
+        ]
+
+        if crop.size == 0:
+            return None
+
+        return crop
+
+    # ========================================================
+    # PERSON DETECTION
+    # ========================================================
+
+    def detect_persons(
+        self,
+        image,
+    ):
+
+        results = (
+            self.person_detector.predict(
+                source=image,
+                conf=self.person_conf,
+                iou=self.person_iou,
+                classes=[0],
+                device=self.yolo_device,
+                verbose=False,
             )
+        )
 
-        # ---------------------------------------------------------
-        # Buffalo detection
-        # ---------------------------------------------------------
-        faces = self.face_app.get(original_image)
+        persons = []
 
-        print("Buffalo detected faces:",len(faces))
+        if not results:
+            return persons
 
-        if len(faces) == 0:
-            return []
+        result = results[0]
 
-        results = []
+        if result.boxes is None:
+            return persons
 
-        # ---------------------------------------------------------
-        # Process every detected face
-        # ---------------------------------------------------------
-        for i, face in enumerate(faces):
+        boxes = result.boxes
 
-            # Buffalo bbox
-            bbox = face.bbox.astype(int)
+        xyxy = (
+            boxes.xyxy
+            .detach()
+            .cpu()
+            .numpy()
+        )
 
-            print(f"\n========== FACE {i} ==========")
-            print("Buffalo bbox:",bbox)
+        confs = (
+            boxes.conf
+            .detach()
+            .cpu()
+            .numpy()
+        )
+
+        for bbox, confidence in zip(
+            xyxy,
+            confs,
+        ):
+
+            bbox = self.clip_bbox(
+                bbox,
+                image.shape,
+            )
 
             x1, y1, x2, y2 = bbox
-            h, w = original_image.shape[:2]
-            # Safety clipping
-            x1 = max(0, x1)
-            y1 = max(0, y1)
-            x2 = min(w, x2)
-            y2 = min(h, y2)
-            # -----------------------------------------------------
-            # Tight face crop
-            # -----------------------------------------------------
-            face_crop = original_image[y1:y2, x1:x2]
-            imgsave = f'/home/webclues-nidhi/mYpY/RnD/Age_detectoion/POC3/output/{time.time()}.jpg'
-            cv2.imwrite(imgsave, face_crop)
-            print('saved-------------------', imgsave)
-            if face_crop.size == 0:
-                print("Invalid face crop")
+
+            if (
+                x2 <= x1
+                or y2 <= y1
+            ):
                 continue
 
-            # -----------------------------------------------------
-            # Larger context crop
-            # -----------------------------------------------------
-            context_crop = self.make_context_crop(
-                original_image,
+            persons.append(
+                {
+                    "bbox": bbox,
+                    "confidence": float(
+                        confidence
+                    ),
+                }
+            )
+
+        return persons
+
+    # ========================================================
+    # MATCH FACE TO PERSON
+    # ========================================================
+
+    def match_face_to_person(
+        self,
+        face_bbox,
+        persons,
+    ):
+
+        if not persons:
+            return None
+
+        fx, fy = (
+            self.bbox_center(
+                face_bbox
+            )
+        )
+
+        candidates = []
+
+        for person in persons:
+
+            person_bbox = (
+                person["bbox"]
+            )
+
+            containment = (
+                self.face_inside_person(
+                    face_bbox,
+                    person_bbox,
+                )
+            )
+
+            iou = self.bbox_iou(
+                face_bbox,
+                person_bbox,
+            )
+
+            px, py = (
+                self.bbox_center(
+                    person_bbox
+                )
+            )
+
+            pw = max(
+                1.0,
+                person_bbox[2]
+                - person_bbox[0],
+            )
+
+            ph = max(
+                1.0,
+                person_bbox[3]
+                - person_bbox[1],
+            )
+
+            center_distance = (
+                abs(fx - px) / pw
+                + abs(fy - py) / ph
+            )
+
+            score = (
+                containment * 10.0
+                + iou * 3.0
+                - center_distance
+            )
+
+            candidates.append(
+                (
+                    score,
+                    containment,
+                    iou,
+                    person,
+                )
+            )
+
+        candidates.sort(
+            key=lambda x: x[0],
+            reverse=True,
+        )
+
+        (
+            score,
+            containment,
+            iou,
+            best_person,
+        ) = candidates[0]
+
+        if containment >= 0.50:
+            return best_person
+
+        fx, fy = (
+            self.bbox_center(
+                face_bbox
+            )
+        )
+
+        px1, py1, px2, py2 = (
+            best_person["bbox"]
+        )
+
+        if (
+            px1 <= fx <= px2
+            and
+            py1 <= fy <= py2
+        ):
+            return best_person
+
+        if iou >= 0.10:
+            return best_person
+
+        return None
+
+    # ========================================================
+    # PROCESS IMAGE
+    # ========================================================
+
+    def process_image(
+        self,
+        original_image,
+        draw=False,
+        return_detections=True,
+    ):
+
+        if original_image is None:
+
+            raise ValueError(
+                "original_image is None"
+            )
+
+        if not isinstance(
+            original_image,
+            np.ndarray,
+        ):
+
+            raise TypeError(
+                "original_image must be "
+                "a NumPy array"
+            )
+
+        # ----------------------------------------------------
+        # PERSONS
+        # ----------------------------------------------------
+
+        print(
+            "\n========================================"
+        )
+
+        print(
+            "PERSON DETECTION"
+        )
+
+        print(
+            "========================================"
+        )
+
+        persons = (
+            self.detect_persons(
+                original_image
+            )
+        )
+
+        print(
+            "Detected persons:",
+            len(persons),
+        )
+
+        # ----------------------------------------------------
+        # FACES
+        # ----------------------------------------------------
+
+        print(
+            "\n========================================"
+        )
+
+        print(
+            "FACE DETECTION"
+        )
+
+        print(
+            "========================================"
+        )
+
+        faces = self.face_app.get(
+            original_image
+        )
+
+        print(
+            "Detected faces:",
+            len(faces),
+        )
+
+        # ----------------------------------------------------
+        # DRAW
+        # ----------------------------------------------------
+
+        annotated = (
+            original_image.copy()
+        )
+
+        if draw:
+
+            for i, person in enumerate(
+                persons
+            ):
+
+                x1, y1, x2, y2 = (
+                    person["bbox"]
+                )
+
+                cv2.rectangle(
+                    annotated,
+                    (x1, y1),
+                    (x2, y2),
+                    (255, 0, 0),
+                    2,
+                )
+
+                cv2.putText(
+                    annotated,
+                    (
+                        f"person {i} "
+                        f"{person['confidence']:.2f}"
+                    ),
+                    (
+                        x1,
+                        max(
+                            20,
+                            y1 - 5,
+                        ),
+                    ),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (255, 0, 0),
+                    2,
+                )
+
+        output_results = []
+
+        # ----------------------------------------------------
+        # EACH FACE
+        # ----------------------------------------------------
+
+        for face_index, face in enumerate(
+            faces
+        ):
+
+            bbox = (
+                face.bbox.astype(float)
+            )
+
+            bbox = self.clip_bbox(
                 bbox,
-                scale=4.5,
-                )
+                original_image.shape,
+            )
 
-            if context_crop.size == 0:
-                print("Invalid context crop")
+            x1, y1, x2, y2 = bbox
+
+            face_width = (
+                x2 - x1
+            )
+
+            face_height = (
+                y2 - y1
+            )
+
+            if (
+                face_width <= 0
+                or face_height <= 0
+            ):
                 continue
 
-            print("Face crop:",face_crop.shape)
-            print("Context crop:",context_crop.shape)
+            face_score = getattr(
+                face,
+                "det_score",
+                None,
+            )
 
-            # -----------------------------------------------------
-            # Convert BGR -> RGB -> PIL
-            # -----------------------------------------------------
-            face_pil = Image.fromarray(
-                cv2.cvtColor(
-                    face_crop,
-                    cv2.COLOR_BGR2RGB,
+            if face_score is not None:
+
+                face_score = float(
+                    face_score
+                )
+
+                if (
+                    face_score
+                    < self.face_conf
+                ):
+                    continue
+
+            # ------------------------------------------------
+            # MATCH PERSON
+            # ------------------------------------------------
+
+            matched_person = (
+                self.match_face_to_person(
+                    bbox,
+                    persons,
                 )
             )
 
-            context_pil = Image.fromarray(
-                cv2.cvtColor(
-                    context_crop,
-                    cv2.COLOR_BGR2RGB,
+            # ------------------------------------------------
+            # FACE CROP
+            # ------------------------------------------------
+
+            face_crop = (
+                self.crop_image(
+                    original_image,
+                    bbox,
                 )
             )
 
-            # -----------------------------------------------------
+            if face_crop is None:
+                continue
+
+            # ------------------------------------------------
+            # PERSON CROP
+            # ------------------------------------------------
+
+            used_person_detector = False
+            fallback_used = False
+
+            if matched_person is not None:
+
+                person_bbox = (
+                    matched_person["bbox"]
+                )
+
+                person_crop = (
+                    self.crop_image(
+                        original_image,
+                        person_bbox,
+                    )
+                )
+
+                if person_crop is not None:
+
+                    used_person_detector = True
+
+                else:
+
+                    person_crop = None
+
+            else:
+
+                person_bbox = None
+                person_crop = None
+
+            # ------------------------------------------------
+            # FALLBACK
+            # ------------------------------------------------
+
+            if person_crop is None:
+
+                person_bbox = (
+                    self.expand_bbox(
+                        original_image,
+                        bbox,
+                        scale=2.5,
+                    )
+                )
+
+                person_crop = (
+                    self.crop_image(
+                        original_image,
+                        person_bbox,
+                    )
+                )
+
+                fallback_used = True
+
+            if person_crop is None:
+
+                print(
+                    f"[Face {face_index}] "
+                    "Person crop failed."
+                )
+
+                continue
+
+            # ------------------------------------------------
+            # DEBUG
+            # ------------------------------------------------
+
+            print(
+                "\n----------------------------------------"
+            )
+
+            print(
+                f"FACE {face_index}"
+            )
+
+            print(
+                "----------------------------------------"
+            )
+
+            print(
+                "Face bbox:",
+                bbox,
+            )
+
+            print(
+                "Face crop:",
+                face_crop.shape,
+            )
+
+            print(
+                "Person crop:",
+                person_crop.shape,
+            )
+
+            print(
+                "Face confidence:",
+                face_score,
+            )
+
+            print(
+                "Matched person:",
+                matched_person is not None,
+            )
+
+            print(
+                "Using YOLO person crop:",
+                used_person_detector,
+            )
+
+            print(
+                "Using fallback:",
+                fallback_used,
+            )
+
+            # ------------------------------------------------
             # MiVOLO
-            # -----------------------------------------------------
-            pred = self.mivolo.predict(
-                face_crop=face_pil,
-                body_crop=context_pil,
+            # ------------------------------------------------
+
+            prediction = (
+                self.mivolo.predict(
+                    face_image=face_crop,
+                    person_image=person_crop,
+                )
             )
 
-            results.append(pred)
+            print(
+                "MiVOLO:",
+                prediction,
+            )
 
-        return results
+            # ------------------------------------------------
+            # RESULT
+            # ------------------------------------------------
+
+            result = {
+
+                "face_index":
+                    face_index,
+
+                "bbox": [
+                    int(x1),
+                    int(y1),
+                    int(x2),
+                    int(y2),
+                ],
+
+                "age":
+                    prediction["age"],
+
+                "gender":
+                    prediction["gender"],
+
+                "gender_confidence":
+                    prediction[
+                        "gender_confidence"
+                    ],
+
+                "raw_logits":
+                    prediction[
+                        "raw_logits"
+                    ],
+
+                "face_confidence":
+                    (
+                        round(
+                            face_score,
+                            3,
+                        )
+                        if face_score
+                        is not None
+                        else None
+                    ),
+
+                "person_bbox":
+                    (
+                        [
+                            int(v)
+                            for v in person_bbox
+                        ]
+                        if person_bbox
+                        is not None
+                        else None
+                    ),
+
+                "person_confidence":
+                    (
+                        round(
+                            matched_person[
+                                "confidence"
+                            ],
+                            3,
+                        )
+                        if matched_person
+                        is not None
+                        else None
+                    ),
+
+                "used_person_detector":
+                    used_person_detector,
+
+                "used_fallback_person_crop":
+                    fallback_used,
+            }
+
+            output_results.append(
+                result
+            )
+
+            # ------------------------------------------------
+            # DRAW FACE
+            # ------------------------------------------------
+
+            if draw:
+
+                cv2.rectangle(
+                    annotated,
+                    (x1, y1),
+                    (x2, y2),
+                    (0, 255, 0),
+                    2,
+                )
+
+                label = (
+                    f"{prediction['age']:.1f}y "
+                    f"{prediction['gender']} "
+                    f"{prediction['gender_confidence']:.2f}"
+                )
+
+                cv2.putText(
+                    annotated,
+                    label,
+                    (
+                        x1,
+                        max(
+                            25,
+                            y1 - 10,
+                        ),
+                    ),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.65,
+                    (0, 255, 0),
+                    2,
+                )
+
+                # Person bbox
+                if matched_person is not None:
+
+                    px1, py1, px2, py2 = (
+                        matched_person[
+                            "bbox"
+                        ]
+                    )
+
+                    cv2.rectangle(
+                        annotated,
+                        (px1, py1),
+                        (px2, py2),
+                        (255, 0, 255),
+                        2,
+                    )
+
+        # ----------------------------------------------------
+        # FINAL
+        # ----------------------------------------------------
+
+        print(
+            "\n========================================"
+        )
+
+        print(
+            "FINAL RESULTS"
+        )
+
+        print(
+            "========================================"
+        )
+
+        for result in output_results:
+
+            print(
+                result
+            )
+
+        if draw:
+
+            return {
+                "results":
+                    output_results,
+
+                "image":
+                    annotated,
+            }
+
+        return output_results

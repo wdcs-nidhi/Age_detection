@@ -1,23 +1,53 @@
+# import cv2
+# from utils.agegender_det_pipeline import AgeGenderPipeline
+
+# if __name__ == "__main__":
+
+#     pipeline = AgeGenderPipeline()
+
+#     image = cv2.imread(
+#         "/home/webclues-nidhi/mYpY/Data/imgs/age/divy.png"
+#     )   
+#     if image is None:
+#         raise FileNotFoundError(
+#             "Image not found at path."
+#         )
+#     results = pipeline.process_image(image)
+   
+#     print(
+#         "Inference Results:",
+#         results
+#     )
+
+
 import cv2
-from utils.agegender_det_pipeline import AgeGenderPipeline
+from utils.agegender_det_pipeline import ( AgeGenderPipeline, )
+
 
 if __name__ == "__main__":
 
-    pipeline = AgeGenderPipeline()
-
-    image = cv2.imread(
-        "/home/webclues-nidhi/mYpY/Data/imgs/age/divy.png"
-    )   
-    if image is None:
-        raise FileNotFoundError(
-            "Image not found at path."
-        )
-    results = pipeline.process_image(image)
-   
-    print(
-        "Inference Results:",
-        results
+    pipeline = AgeGenderPipeline(
+        face_model="buffalo_l",
+        person_model="yolov8n.pt",
+        mivolo_config=("/home/webclues-nidhi/mYpY/RnD/Age_detectoion/models/config.json"),
+        mivolo_weights=("/home/webclues-nidhi/mYpY/RnD/Age_detectoion/models/model.safetensors"),
+        device="cpu",
     )
+    image_path = ("/home/webclues-nidhi/mYpY/Data/imgs/age/divy.png")
+    output_path = ("/home/webclues-nidhi/mYpY/RnD/Age_detectoion/output_debug.jpg")
+
+    image = cv2.imread(image_path)
+
+    if image is None:
+        raise FileNotFoundError( f"Image not found: {image_path}" )
+
+    output = pipeline.process_image( image, draw=True, )
+
+    print("\nInference Results:")
+    for result in output["results"]:
+        print( result )
+    cv2.imwrite( output_path, output["image"], )
+    print( "\nSaved:", output_path, )
 
 
 # from safetensors.torch import load_file
