@@ -1,25 +1,3 @@
-# import cv2
-# from utils.agegender_det_pipeline import AgeGenderPipeline
-
-# if __name__ == "__main__":
-
-#     pipeline = AgeGenderPipeline()
-
-#     image = cv2.imread(
-#         "/home/webclues-nidhi/mYpY/Data/imgs/age/divy.png"
-#     )   
-#     if image is None:
-#         raise FileNotFoundError(
-#             "Image not found at path."
-#         )
-#     results = pipeline.process_image(image)
-   
-#     print(
-#         "Inference Results:",
-#         results
-#     )
-
-
 import cv2
 from utils.agegender_det_pipeline import ( AgeGenderPipeline, )
 
@@ -48,21 +26,6 @@ if __name__ == "__main__":
         print( result )
     cv2.imwrite( output_path, output["image"], )
     print( "\nSaved:", output_path, )
-
-
-# from safetensors.torch import load_file
-
-# path = "/home/webclues-nidhi/mYpY/RnD/Age_detectoion/models/model.safetensors"
-
-# state = load_file(path, device="cpu")
-
-# print("\n========== ALL CHECKPOINT KEYS ==========")
-
-# for k, v in state.items():
-#     print(f"{k:90s} {tuple(v.shape)}")
-
-# print("========================================")
-
 
 
 

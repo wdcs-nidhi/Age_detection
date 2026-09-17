@@ -1,0 +1,7 @@
+pip install opencv-python
+pip install torch torchvision torchaudio
+pip install insightface
+pip install ultralytics
+pip install safetensors
+pip install transformers
+pip install timm
